@@ -117,3 +117,48 @@ and claimed and both balances must reach zero. A deterministic walk reaches all 
 the clipped-reward path and WETH-denominated rewards.
 
 No defect was found by these additions; `.imd-findings.json` was therefore not written.
+
+## Ethereum mainnet launch coverage
+
+`MainnetFixture.sol` reproduces chain 1 with the brief's dependency addresses populated and
+deploys the three contracts from exactly the brief's constructor bytes
+(`script/MainnetParameters.sol`), in the order VerdictBurnVault, VerdictOracle, VerdictMarkets.
+Slot 1 runs against **WETH9's real runtime bytecode** at its mainnet address, read from chain 1
+with `cast code` on 2026-10-11 (block 26172235) and committed in `test/mocks/MainnetBytecode.sol`
+with its three metadata storage slots restored; it needs no RPC at test time. The IMD token
+("Identity.md", an OpenZeppelin ERC20 with the LayerZero OFT extension, 23 KB of runtime) is too
+large for a solc literal, so slot 0 keeps the OpenZeppelin-based `MockIMD` at the IMD address.
+The launch signer's key is not available, so the fixture walks the launch owner through the
+real 48-hour rotation to a test key before any request is paid. A read-only public RPC confirmed
+on the same day that IMD, WETH9 and Intake v2 have code, `symbol()`/`decimals()` match, and
+`Intake.priceOf(actionId, IMD)` is `500000000000000000`.
+
+`MainnetDependencies.t.sol` covers the launch's own settings on both paths: constructor word
+counts within the manifest's sixteen; every misconfigured constructor argument rejected
+(zero treasury or sink, equal tokens, fees over 500 bps, zero cap, a delay over 30 days, zero
+price or action, zero owner); the chain-1 EIP-712 domain and the proof that the skill's Sepolia
+vector signature does **not** replay on chain 1; a full WETH slot flow through WETH9's payable
+fallback, `transferFrom` and `withdraw` with the exact 1.5% / 0% / 1% split; a 500 IMD market at
+the cap with the exact 1.5% / 0.5% / 0.5% split paid to creator, burn vault and treasury; caps
+exact to the wei and per market; WETH bets without allowance or balance; ether sent to the
+markets or the vault; the allowlist starting on and empty (not even the guardian or treasury
+can create or admit), its revocation, permanent disabling and the calls that fail afterwards;
+two-step guardian and oracle ownership handover with the gated renounce; pause stopping entry
+only; the 48-hour clock restarted by a replacement proposal, with acceptance refused one second
+early, by a non-owner, or twice; a request paid before a signer rotation keeping the launch
+signer while the retry trusts the new one; the 0.25 IMD reward ceiling and the 2.25 IMD bounty
+floor with every settlement step paying exactly the ceiling; voids paying no fee to anyone; and
+a 1000-run fuzz over both pools proving fees never exceed 2.5% and payouts close each ledger
+with the owner receiving nothing.
+
+`MainnetInvariant.t.sol` is a campaign of 160 sequences of 64 calls against that deployment:
+bets in both slots (wrapping fresh ETH through WETH9 when an actor runs low), asks, deliveries,
+proposals, escalations, replacements, settlements, claims, pauses by the owner, price rotations
+through the 48-hour delay, and privileged calls attempted by outsiders. After every call the
+markets' IMD balance equals the IMD pools still owed plus bounties held and its WETH balance the
+WETH pools; the treasury, the burn vault and the owner hold exactly what the brief's shares say
+(the vault never holds WETH, the owner never holds anything); no reward exceeds 0.25 IMD; the
+guardian, oracle owner, signer and allowlist stay as deployed. After every sequence all markets
+are settled and claimed and both balances must reach zero.
+
+No defect was found by these additions; `.imd-findings.json` was therefore not written.
