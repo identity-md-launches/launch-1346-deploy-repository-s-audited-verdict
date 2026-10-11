@@ -1,0 +1,42 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "VerdictBurnVault",
+      "constructorArgs": []
+    },
+    {
+      "contract": "VerdictOracle",
+      "constructorArgs": [
+        "0xa43e6f75ee006411f79ac1c84120606c2330de82",
+        "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+        "0x5598aa9146215bc13eb26f2c692ad1461fd32982",
+        "0x6f7261636c652e72657175657374406f7261636c652d31000000000000000000",
+        "500000000000000000",
+        "$owner",
+        "172800"
+      ]
+    },
+    {
+      "contract": "VerdictMarkets",
+      "constructorArgs": [
+        "$contract:VerdictOracle",
+        "0x2a85072b71908ca9255934250bfc6ceff82d0231",
+        "$contract:VerdictBurnVault",
+        "$owner",
+        "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7",
+        "150",
+        "50",
+        "50",
+        "500000000000000000000",
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        "150",
+        "0",
+        "100",
+        "1000000000000000000",
+        "250000000000000000"
+      ]
+    }
+  ],
+  "notes": "Ethereum mainnet (chain 1) deployment of the audited Verdict parimutuel prediction-market contracts from Sepolia launch 1301, unchanged in behaviour: src/VerdictBurnVault.sol, src/VerdictOracle.sol and src/VerdictMarkets.sol, Solidity 0.8.26 with the vendored OpenZeppelin v5, deployed in that order. VerdictBurnVault takes no arguments: it is a permanent ERC20 sink with no callable functions. VerdictOracle(intake, asset, signer, actionId, price, owner, configDelay): IMD Intake v2 0xa43e6f75ee006411f79ac1c84120606c2330de82, the IMD token 0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7, oracle signer 0x5598aa9146215bc13eb26f2c692ad1461fd32982, action id bytes32('oracle.request@oracle-1'), price 0.5 IMD (500000000000000000 wei), owner $owner, which resolves to the launch owner 0x397dacb1ee8e9a8ce5196988958f56bde0a0a312, and a 48-hour (172800 s) delay before any proposed config change (intake, asset, signer, price) can be accepted. VerdictMarkets(oracle, treasury, burnSink, guardian, token0, creatorBps0, burnBps0, treasuryBps0, maxPool0, token1, creatorBps1, burnBps1, treasuryBps1, maxPool1, maxSettlerReward): oracle is the VerdictOracle deployed just before; treasury is the separate wallet 0x2a85072b71908ca9255934250bfc6ceff82d0231, which only receives the treasury fee share and has no role; burnSink is the VerdictBurnVault deployed first; guardian is $owner (the launch owner, who can pause and manage the creator allowlist but cannot touch funds or outcomes). Collateral slot 0 is IMD: 1.5% to the market creator, 0.5% burned to VerdictBurnVault, 0.5% to the treasury, 500 IMD pool cap per market. Slot 1 is WETH9 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2: 1.5% to the creator, no burn, 1% to the treasury, 1 WETH pool cap per market. Total fee 2.5% in both slots. Maximum settler reward 0.25 IMD (250000000000000000 wei) per action; bounties, oracle fees and settler rewards are always paid in IMD. The creator allowlist starts enabled and empty, so no market can be created until the guardian admits a creator after deployment. No constructor reads another contract, so the empty-chain rehearsal passes; the live Intake, IMD and WETH9 are first touched on use. No token, pool, proxy, ETH funding or initialization call. web/ and dist/ are untouched; docs/agents/addresses.json is filled by the deployment handoff."
+}
