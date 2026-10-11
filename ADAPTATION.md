@@ -1,19 +1,22 @@
 # Verdict Ethereum mainnet adaptation (after Sepolia launch 1301)
 
 This is the contracts-only Ethereum mainnet (chain id 1) launch of the two-collateral Verdict
-contracts reviewed and deployed on Sepolia in launch 1301. `src/VerdictBurnVault.sol`,
-`src/VerdictOracle.sol`, `src/VerdictMarkets.sol`, `src/OracleAttestation.sol` and both interfaces
-are **byte-for-byte unchanged**: no behaviour changes, because no reproduced audit finding is a
-defect in the contracts and the launch rules were already met by the launch-1301 constructors
-(nonpayable, fully configured, 15 static arguments at most, no external call in a constructor,
-owner and guardian as arguments, no proxy, mint, pause of balances, DELEGATECALL, CALLCODE or
-SELFDESTRUCT). No token, pool, proxy, initializer, external library or new authority is
-introduced. Solidity 0.8.26, the Foundry configuration, vendored OpenZeppelin v5.5.0 and forge-std
-are unchanged. `web/` and `dist/` are untouched. No dependency was installed.
+contracts reviewed and deployed on Sepolia in launch 1301. The accepted mainnet adaptation
+preserved all application source. This reopened revision changes only `VerdictMarkets._validateParams`
+to fix reproduced finding **73ad1052**: a request window must be at least one hour, and the
+creator-selected timeout must be within 365 days of creation. The revision record below lists
+the tests, documentation changes and dispositions for all reopened findings.
 
-What changed is the deployment: the Sepolia arguments (TestIMD, Sepolia WETH, treasury = owner,
-zero configuration delay) become the mainnet arguments the brief fixes, and every file that
-encoded or asserted the Sepolia values follows.
+`VerdictBurnVault`, `VerdictOracle`, the canonical attestation code and both interfaces remain
+unchanged. All constructor arguments and ABIs remain unchanged: nonpayable constructors, at most
+15 static arguments, no dependency calls during construction, and explicit owner/guardian.
+No token, pool, proxy, initializer, linked library or new authority is introduced. Solidity
+0.8.26, the Foundry configuration and vendored dependencies are unchanged. `web/` and `dist/`
+are untouched. No dependency was installed.
+
+The initial mainnet adaptation changed the Sepolia deployment arguments (TestIMD, Sepolia WETH,
+treasury = owner, zero configuration delay) to the approved mainnet arguments. That accepted work
+is retained below as history; the reopened revision does not change deployment terms.
 
 ## Mainnet arguments
 
@@ -45,8 +48,9 @@ markets guardian are the launch owner.
 | `ADAPTATION.md` | This file. | Acceptance criteria. |
 
 `docs/agents/abi/*.json` are unchanged and were re-checked equal to `forge inspect <Contract> abi`
-of this build. The earlier review reports under `docs/` and `test/*IndependentReview.t.sol`
-describe the unchanged source and keep their references to the Sepolia parameter file as history.
+of the accepted build. This revision adds no ABI members. The earlier review reports under
+`docs/` describe earlier source snapshots; their references to the Sepolia parameter file remain
+as history. Existing `test/*IndependentReview.t.sol` suites are re-run on this revision.
 
 ## Imported audit dispositions
 
@@ -110,7 +114,7 @@ this launch changes:
 - **Tools.** Foundry 1.8.3 with the project's configuration. Slither and Mythril were not
   available in this environment; the earlier reviews ran Slither on the unchanged source.
 
-## Validation
+## Accepted mainnet adaptation validation (before this revision)
 
 - Before the change: `forge build` and `forge test` passed **198 tests in 27 suites**.
 - After the change: `forge build` passes; `forge test` passes **202 tests in 28 suites**: every
@@ -129,3 +133,105 @@ guardian admits creators after deployment. The worker reads no keys and broadcas
 launch's manifest, final review and deployment stages deploy the built bytecodes and write the
 confirmed addresses and deploy block into `docs/agents/addresses.json`. No addresses are invented
 here. `web/` and `dist/` keep the Sepolia site; a later job updates them.
+
+## Reopened revision: 73ad1052 and advisory review
+
+The supplied `Proof_73ad105210ae.t.sol` was copied unchanged into `test/scratch/` and run before
+edits. It failed with **"next call did not revert as expected"**: an allowlisted creator could
+create the one-second request window and `uint64.max` timeout. The pre-existing full suite
+passed **202 tests in 28 suites** on the starting source. Additional pre-fix timing probes
+independently reproduced acceptance of a short request window, an excessive timeout with a normal
+request window, and a distant close that bypasses a bound measured only from close.
+
+### Revision changes and reasons
+
+| File | Change and reason |
+| --- | --- |
+| `src/VerdictMarkets.sol` | After existing ordering validation, reject `answerUntil - answerFrom < 1 hours` or `uint256(voidAfter) - block.timestamp > 365 days` with `InvalidParams`. The required audit repair prevents creators choosing an effectively unreachable timeout. Measuring from creation also bounds a distant close or answer start; measuring only from close would leave that bypass. Ordering checks precede subtraction, so invalid orders still produce `InvalidParams`, not arithmetic panics. Validation runs before any bounty transfer or state allocation. |
+| `test/VerdictImportedAudit.t.sol` | Change only the old regression that asserted acceptance of `uint64.max` timeout to assert rejection without custody or market creation. That previous documented limitation is precisely the reopened finding. |
+| `test/VerdictMarketTiming.t.sol` | Nine regressions: supplied input, each independent bound, distant-close bypass, unordered timestamps, inclusive one-hour/365-day boundaries with both collaterals and rewards, valid timestamps near `uint64.max`, and randomized valid schedules that time out and refund full principal. Three fuzz tests use the configured 512 runs. |
+| `test/MainnetAdvisoryReview.t.sol` | Eight executable reproductions of the optional reports using the mainnet fee/reward settings and 48-hour delay. They pin preserved behavior, actual recipient balances, rollback on price mismatch, the delay, and the code-bearing signer verification branch. Only test signers and local mocks are used. |
+| `README.md`, `docs/AGENTS.md`, `docs/DEPLOYMENT.md` | Document the enforced timing bounds; make retry's consumption of the escalation ask explicit; clarify empty-pool bounty spending, body/panel requirements, the pinned service cap, irreversible owner renunciation, stored-price update delays, and ERC-1271 requirements for signers with code. Correct the prior byte-for-byte source claim in the deployment handoff. |
+| `.imd-responses.json` | Answer all eight reopened and three imported findings with concrete test evidence and dispositions. |
+| `ADAPTATION.md` | This revision record and verification evidence; the earlier accepted adaptation remains recorded above. |
+
+The 365-day bound is on the timeout selected at creation, not a forced termination of a valid
+provisional outcome. Existing dispute priority, at most one replacement, and one-to-three-day
+dispute windows remain unchanged. No guardian rescue, new settlement authority or forced seizure
+is introduced. Someone must still call the eligible settlement function and each bettor must
+claim. The bound does not guarantee an oracle response within the one-hour minimum.
+
+### Advisory decisions
+
+All advisory mechanics reproduced. `disputed` in the response file means that the proposed
+on-chain behavior change is declined for this bounded revision, not that the reported sequence
+was absent. The optional reports are retained as explicit design/operational limits:
+
+- **3f3de5b2:** a permissionless retry consumes the second of the two total asks; no escalation
+  remains. README's dispute step now states the condition explicitly. Allowing a third ask
+  would change the fixed budget and reward-reserve design. Blocking bettors alone is bypassed
+  through another address. The most recent ask remains the only eligible primary answer.
+- **fd1d671c / a3d3cb7d:** a signed but market-invalid delivery still clears pending and blocks
+  retry. The existing independent regression deliberately pins this rule. Reopening delivery
+  retries is a different settlement design; it is not necessary to fix the unbounded timeout.
+  Creator guidance now states that body panel/quorum must satisfy market minima. The new
+  panel-size reproduction and existing agreement-size reproduction both reach full refunds.
+- **b6cffb21:** an empty pool can spend the creator's advertised bounty on a paid ask and
+  successful proposal/void rewards. This is a real avoidable creator expense, but the accepted
+  contract pays for successful actions without a funded-stake prerequisite. It is retained
+  under the behavior-preservation brief and documented with the exact 2.25 IMD example and the
+  cheaper direct-timeout route. Guidance is not an on-chain restriction on other callers.
+- **080095bd:** with a primary panel of 60, a panel of 100 cannot meet the doubled-panel rule.
+  Creator guidance now requires a primary panel at most 50 for an escalation under the pinned
+  100-seat service cap, or no escalation body. The external cap is not made a new immutable
+  on-chain constant; it can change when the owner updates Intake/action. Missing or unusable
+  escalation still leaves the primary outcome available at the extended deadline.
+- **23dbfcb2:** inherited owner-only renunciation is irreversible and strands pending updates.
+  An unrelated caller cannot renounce; this is voluntary relinquishment of the explicitly
+  entrusted owner role, also present in the canonical Ownable consumer example. It is retained
+  and explicitly called out for operators needing future configuration.
+- **99099188:** price mismatch reverts atomically and the matching owner update takes 48 hours.
+  The canonical consumer reference uses a stored owner-approved payment price, described as
+  the owner's ceiling; it does not require automatic price tracking. Automatic repricing would
+  change the approved spending policy. The regression checks lower/higher-price failures, no
+  spend on failed asks, and successful purchase after the delayed update.
+- **2e886e8d / 35485df0:** captured authorities, delayed rotation, entry-only guardian powers,
+  permissionless escalation and ERC-1271 verification for signers with code are trust assumptions.
+  Tests reproduce captured-key acceptance after an actual 48-hour rotation and a rejecting
+  code-bearing signer. The latter models the verification branch with `vm.etch`; no EIP-7702
+  delegation transaction or live signer change was performed.
+- **15f4d85b:** already fixed by the accepted mainnet adaptation. Existing stale-Sepolia and
+  exact-mainnet rehearsals are retained and re-run. No stale manifest is restored and no new
+  manifest is written. Deployment addresses and block still require the confirmed launch
+  handoff; no live values are fabricated.
+
+### Revision verification
+
+Checks use Foundry 1.8.3, Solidity 0.8.26 and the unchanged project configuration.
+
+| Check | Result |
+| --- | --- |
+| Starting `forge build` and existing `forge test` (excluding scratch) | Passed; 202 tests, 28 suites. |
+| Supplied proof before the fix | Failed: market creation did not revert, as reported. |
+| Eight advisory reproductions before production edits | All passed, confirming the reported mechanics. |
+| New timing/advisory suites after the fix | 17 passed; each of three fuzz tests ran 512 cases. |
+| Final root `forge build` | Passed. |
+| Clean offline replay, scratch and supplied inputs removed | `forge build --offline` and `forge test --offline` passed from a fresh source/dependency copy with no cache or artifacts and an environment containing only PATH: 219 tests in 30 suites, zero failures/skips. No network or dependency download was required. |
+| Final root `forge test` | 220 passed, 0 failed, 0 skipped; 31 suites, including the unchanged supplied scratch proof. There are 219 delivered tests in 30 suites after scratch removal. |
+| Existing independently authored review suites | All 33 tests passed: IndependentReview (12), RevisionIndependentReview (5), SettlerIndependentReview (10), CollateralIndependentReview (6). |
+| ABI and artifact checks | All three committed agent ABIs match the built ABIs. Constructors remain nonpayable with 0/7/15 static inputs, no library links, runtime below EIP-170, and no forbidden runtime opcodes outside PUSH data. |
+| Scope check | Only the files listed for this revision changed. Build settings, dependencies, deployment parameters, external addresses, all other production sources, `web/` and `dist/` match their starting hashes. |
+
+Application runtime sizes are 16 bytes (BurnVault), 7,720 bytes (Oracle), and 17,837 bytes
+(Markets). Markets initcode is 18,886 bytes before the unchanged 480-byte constructor encoding.
+The exact mainnet factory rehearsal and supplied proof both pass. The timing guard's production
+source SHA-256 is `9cb5bcbd2c31b0c0a017fe4c9b4e77f21e27b31c4e2072fca10acdbf9906c9e8`.
+
+The local review checked that short-circuit ordering makes the new subtractions safe, both
+constraints are checked before custody, and neither inserts a dependency call or changes
+permissions, accounting or existing settlement transitions. The historical review reports are
+not new independent approvals of this source. Existing independently authored suites were re-run;
+the launch's separate final independent review still receives this revision and its responses.
+Slither and Mythril were unavailable and were not run. No network dependency installation,
+live transactions, wallet access, new mainnet address claims or GitHub publication occurred.
+Confirmed deployment receipts and addresses remain the launch service's handoff.

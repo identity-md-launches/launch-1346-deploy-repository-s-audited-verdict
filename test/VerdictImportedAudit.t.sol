@@ -28,18 +28,15 @@ contract VerdictImportedAuditTest is TestBase {
         assertEq(markets.getMarket(id).returnedBounty, 0);
     }
 
-    function test_creatorCanSetVoidAfterFarInFuture() public {
+    /// @dev Reopened audit 73ad1052 requires rejecting the formerly documented indefinite lock.
+    function test_creatorCannotSetVoidAfterFarInFuture() public {
         VerdictMarkets.Params memory p = params();
         p.voidAfter = type(uint64).max;
-        uint256 id = createWith(p);
-        betAs(id, alice, 1, 10 ether);
-        vm.warp(uint256(p.answerUntil) + 365 days);
-        vm.expectRevert(VerdictMarkets.OutsideWindow.selector);
-        markets.voidMarket(id);
-        vm.prank(alice);
-        vm.expectRevert(VerdictMarkets.WrongState.selector);
-        markets.claim(id);
-        assertEq(markets.totalStake(id, alice), 10 ether);
+        vm.prank(creator);
+        vm.expectRevert(VerdictMarkets.InvalidParams.selector);
+        markets.createMarket(p, body, escalationBody, "", 0);
+        assertEq(markets.marketCount(), 0);
+        assertEq(token.balanceOf(address(markets)), 0);
     }
 
     function test_pauseOnlyBlocksEntryAndReleaseReturnsAllUnspentBounty() public {

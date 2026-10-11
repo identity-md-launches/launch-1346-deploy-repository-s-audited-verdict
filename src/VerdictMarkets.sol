@@ -596,6 +596,11 @@ contract VerdictMarkets is ReentrancyGuard {
         ) {
             revert InvalidParams();
         }
+        // Bound the ask opportunity and the timeout from creation, so a distant close cannot bypass it.
+        // The ordering checks above make both subtractions safe.
+        if (p.answerUntil - p.answerFrom < 1 hours || uint256(p.voidAfter) - block.timestamp > 365 days) {
+            revert InvalidParams();
+        }
         if (p.collateralId > 1) revert InvalidCollateral();
         if (p.answerType == 0) {
             if (p.bounds.length != 0 || p.keys.length != 0) revert InvalidParams();

@@ -105,7 +105,7 @@ price of the asks the market may still need. Every call is permissionless.
 When `status == 0` and `answerFrom <= now < answerUntil`, call `resolve(id, body)` with the
 exact `body` bytes from `MarketCreated`. The market pays the oracle from its bounty, records
 `OracleAsked`, and pays you the reward. A second `resolve` is possible 24 hours later only if the
-first request is still unanswered. Only the most recent paid primary ask can establish the outcome.
+first request is still unanswered. The retry consumes the second and last ask, so escalation is then unavailable even if bounty remains. A delivered answer that fails the market's panel or other checks still blocks retry. Only the most recent paid primary ask can establish the outcome. Skip asks when `pool == 0`: they still spend bounty and pay rewards, but no funded outcome can finalize; timeout voiding avoids that expense.
 
 ### propose
 
@@ -130,10 +130,10 @@ delivery transaction:
 ### escalate and the replacement proposal
 
 During the dispute window, before `answerUntil`, anyone may call `escalate(id, escalationBody)`
-once if the market has an escalation body. It spends the market's last ask and extends the
+once if the market has an escalation body and the primary retry has not already consumed its second ask. It spends the market's last ask and extends the
 window to at least 24 hours. When the escalation answer is delivered, `propose(id, a)` with that
 attestation (panel at least twice the first one's) replaces the outcome and pays the proposal
-reward. `escalate` itself pays nothing.
+reward. `escalate` itself pays nothing. Under the pinned 100-seat oracle service cap, a primary panel above 50 cannot receive a usable doubled-panel escalation. The contract does not enforce that service cap before spending the fee.
 
 ### finalize
 
@@ -176,4 +176,11 @@ still owed plus `bountyRemaining`; its WETH balance is the sum of WETH pools sti
   funds or outcomes. The treasury (`0x2a85072b71908ca9255934250bfc6ceff82d0231`) is a separate
   wallet that only receives the treasury fee share; it has no role. A fresh deployment accepts no markets until the guardian admits a creator or
   disables the allowlist.
-- A creator chooses the market's schedule. Nothing bounds `voidAfter`; inspect it before betting.
+- A creator chooses the schedule within the enforced bounds: at least one hour between
+  `answerFrom` and `answerUntil`, and `voidAfter` no later than 365 days after creation.
+  Inspect all deadlines before betting. Existing provisional dispute windows may finish after
+  `voidAfter`; finalization and claims retain their existing rules.
+- The oracle pays its stored price, so an Intake price change can block asks during the 48-hour
+  update delay. Ownership renunciation permanently disables those updates. A signer with code
+  must accept the service signatures through ERC-1271. See README's trust notes for these
+  operational constraints and the reproduced advisory scenarios.
