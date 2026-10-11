@@ -5,12 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {VerdictBurnVault} from "../src/VerdictBurnVault.sol";
 import {VerdictOracle} from "../src/VerdictOracle.sol";
 import {VerdictMarkets} from "../src/VerdictMarkets.sol";
-import {SepoliaParameters} from "../script/SepoliaParameters.sol";
+import {MainnetParameters} from "../script/MainnetParameters.sol";
 import {MockIMD} from "./mocks/MockIMD.sol";
 
 contract RehearsalFactory {
     function deploy(bytes memory initCode, bytes32 salt) external returns (address deployed) {
-        require(block.chainid == SepoliaParameters.CHAIN_ID, "Sepolia only");
+        require(block.chainid == MainnetParameters.CHAIN_ID, "Ethereum mainnet only");
         require(initCode.length <= 49_152, "initcode too large");
         assembly ("memory-safe") {
             deployed := create2(0, add(initCode, 32), mload(initCode), salt)
@@ -20,51 +20,52 @@ contract RehearsalFactory {
 }
 
 contract DeploymentTest is Test {
-    function test_exactSepoliaFactoryDeploymentWithoutDependencyCode() public {
-        vm.chainId(11155111);
-        assertEq(SepoliaParameters.CHAIN_ID, block.chainid);
-        assertEq(SepoliaParameters.IMD.code.length, 0);
-        assertEq(SepoliaParameters.INTAKE.code.length, 0);
+    function test_exactMainnetFactoryDeploymentWithoutDependencyCode() public {
+        vm.chainId(1);
+        assertEq(MainnetParameters.CHAIN_ID, block.chainid);
+        assertEq(MainnetParameters.IMD.code.length, 0);
+        assertEq(MainnetParameters.INTAKE.code.length, 0);
         RehearsalFactory factory = new RehearsalFactory();
         address vault = factory.deploy(type(VerdictBurnVault).creationCode, keccak256("vault"));
         VerdictOracle oracle = VerdictOracle(
             factory.deploy(
-                bytes.concat(type(VerdictOracle).creationCode, SepoliaParameters.oracleConstructorArgs()),
+                bytes.concat(type(VerdictOracle).creationCode, MainnetParameters.oracleConstructorArgs()),
                 keccak256("oracle")
             )
         );
         VerdictMarkets markets = VerdictMarkets(
             factory.deploy(
                 bytes.concat(
-                    type(VerdictMarkets).creationCode, SepoliaParameters.marketsConstructorArgs(address(oracle), vault)
+                    type(VerdictMarkets).creationCode, MainnetParameters.marketsConstructorArgs(address(oracle), vault)
                 ),
                 keccak256("markets")
             )
         );
-        assertEq(oracle.owner(), SepoliaParameters.OWNER);
+        assertEq(oracle.owner(), MainnetParameters.OWNER);
         assertTrue(oracle.owner() != address(factory));
-        assertEq(oracle.intake(), SepoliaParameters.INTAKE);
-        assertEq(oracle.asset(), SepoliaParameters.IMD);
-        assertEq(oracle.signer(), SepoliaParameters.SIGNER);
-        assertEq(oracle.actionId(), SepoliaParameters.ACTION);
-        assertEq(oracle.price(), SepoliaParameters.PRICE);
-        assertEq(oracle.configDelay(), 0);
+        assertEq(oracle.intake(), MainnetParameters.INTAKE);
+        assertEq(oracle.asset(), MainnetParameters.IMD);
+        assertEq(oracle.signer(), MainnetParameters.SIGNER);
+        assertEq(oracle.actionId(), MainnetParameters.ACTION);
+        assertEq(oracle.price(), MainnetParameters.PRICE);
+        assertEq(oracle.configDelay(), 48 hours);
         assertEq(address(markets.oracle()), address(oracle));
-        assertEq(address(markets.collateral(0)), SepoliaParameters.IMD);
-        assertEq(address(markets.collateral(1)), SepoliaParameters.WETH);
-        assertEq(SepoliaParameters.WETH.code.length, 0);
-        assertEq(markets.treasury(), SepoliaParameters.OWNER);
-        assertEq(markets.guardian(), SepoliaParameters.OWNER);
+        assertEq(address(markets.collateral(0)), MainnetParameters.IMD);
+        assertEq(address(markets.collateral(1)), MainnetParameters.WETH);
+        assertEq(MainnetParameters.WETH.code.length, 0);
+        assertEq(markets.treasury(), MainnetParameters.TREASURY);
+        assertTrue(markets.treasury() != markets.guardian(), "treasury is a separate wallet");
+        assertEq(markets.guardian(), MainnetParameters.OWNER);
         assertEq(markets.burnSink(), vault);
         assertEq(markets.creatorFeeBps(0), 150);
         assertEq(markets.burnFeeBps(0), 50);
         assertEq(markets.treasuryFeeBps(0), 50);
-        assertEq(markets.maxPoolPerMarket(0), SepoliaParameters.IMD_POOL_CAP);
+        assertEq(markets.maxPoolPerMarket(0), MainnetParameters.IMD_POOL_CAP);
         assertEq(markets.creatorFeeBps(1), 150);
         assertEq(markets.burnFeeBps(1), 0);
         assertEq(markets.treasuryFeeBps(1), 100);
-        assertEq(markets.maxPoolPerMarket(1), SepoliaParameters.WETH_POOL_CAP);
-        assertEq(markets.maxSettlerReward(), SepoliaParameters.MAX_SETTLER_REWARD);
+        assertEq(markets.maxPoolPerMarket(1), MainnetParameters.WETH_POOL_CAP);
+        assertEq(markets.maxSettlerReward(), MainnetParameters.MAX_SETTLER_REWARD);
         assertTrue(markets.allowlistOn());
         assertFalse(markets.paused());
         checkBytecode(vault);
@@ -73,9 +74,9 @@ contract DeploymentTest is Test {
     }
 
     function test_rehearsalRefusesOtherChains() public {
-        vm.chainId(1);
+        vm.chainId(11155111);
         RehearsalFactory factory = new RehearsalFactory();
-        vm.expectRevert("Sepolia only");
+        vm.expectRevert("Ethereum mainnet only");
         factory.deploy(type(VerdictBurnVault).creationCode, bytes32(0));
     }
 

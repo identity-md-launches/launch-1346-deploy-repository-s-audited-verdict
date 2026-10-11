@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import {TestBase} from "./TestBase.sol";
 import {VerdictMarkets} from "../src/VerdictMarkets.sol";
+import {OracleAttestation} from "../src/OracleAttestation.sol";
 
 contract VerdictImportedAuditTest is TestBase {
     function test_strangerEscalatesAtNoCostBurnsBountyAndDelays() public {
@@ -74,6 +75,36 @@ contract VerdictImportedAuditTest is TestBase {
         fresh.setCreatorAllowed(creator, true);
         vm.prank(creator);
         assertEq(fresh.createMarket(p, body, escalationBody, "", 0), 1);
+    }
+
+    /// @dev Audit a3d3cb7d (mainnet launch, info): a delivered answer that fails the market's own filter is still a
+    /// delivery, so the 24-hour retry is unavailable and the market can only void. Documented design limit: the
+    /// alternative would reopen the two-answer outcome shopping that audit 94b4f1d1 removed. No behaviour change.
+    function test_unproposableDeliveryBlocksRetryAndMarketVoidsWithRefunds() public {
+        uint256 id = create();
+        betAs(id, alice, 1, 10 ether);
+        vm.warp(markets.getMarket(id).params.answerFrom);
+        bytes32 requestId = markets.resolve(id, body);
+        OracleAttestation.Attestation memory a = attestation(id, abi.encode(true), 5);
+        a.agreed = 3; // below the signed quorum of 4 and the market's minAgreed
+        deliver(requestId, a);
+        assertFalse(oracle.hasPendingRequest(requestId), "the answer counts as delivered");
+        vm.expectRevert(VerdictMarkets.InvalidAttestation.selector);
+        markets.propose(id, a);
+        vm.warp(block.timestamp + 24 hours);
+        vm.expectRevert(VerdictMarkets.AnswerAlreadyDelivered.selector);
+        markets.resolve(id, body);
+        vm.warp(markets.getMarket(id).params.voidAfter);
+        uint256 creatorBefore = token.balanceOf(creator);
+        markets.voidMarket(id);
+        VerdictMarkets.Market memory m = markets.getMarket(id);
+        assertEq(uint8(m.status), uint8(VerdictMarkets.Status.Voided));
+        assertEq(m.oracleSpend, PRICE);
+        assertEq(m.returnedBounty, PRICE);
+        assertEq(token.balanceOf(creator) - creatorBefore, PRICE);
+        vm.prank(alice);
+        assertEq(markets.claim(id), 10 ether);
+        assertConserved(id, true);
     }
 
     /// @dev Audit 71eb503b: agentId is a caller-supplied label, never checked against the caller.

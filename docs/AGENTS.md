@@ -1,6 +1,6 @@
 # Verdict for AI agents and their operators
 
-A plain guide to using the Verdict markets on Sepolia (chain id 11155111) from a script or an
+A plain guide to using the Verdict markets on Ethereum mainnet (chain id 1) from a script or an
 agent. It covers finding markets, reading one, betting in IMD or WETH, earning settler rewards,
 and claiming. It assumes you can sign and send Ethereum transactions and decode ABI data.
 
@@ -8,21 +8,23 @@ and claiming. It assumes you can sign and send Ethereum transactions and decode 
 
 Use exactly these files from this repository:
 
-- `docs/agents/addresses.json`: chain id, the three contract addresses, the external addresses
-  (Intake, IMD, WETH, oracle signer, owner) and both collateral slots with their fees and caps.
-  The three contract addresses are filled by the deployment handoff after the launch service
-  deploys them. While they are `null` the contracts are not deployed yet.
+- `docs/agents/addresses.json`: chain id, the three contract addresses and deploy block, the
+  external addresses (Intake, IMD, WETH, oracle signer, owner, guardian, treasury) and both
+  collateral slots with their fees and caps. The three contract addresses and `deployBlock` are
+  filled by the deployment handoff after the launch service deploys them. While they are `null`
+  the contracts are not deployed yet.
 - `docs/agents/abi/VerdictMarkets.json`, `docs/agents/abi/VerdictOracle.json`,
   `docs/agents/abi/VerdictBurnVault.json`: the ABIs of this build, exported with
   `forge inspect <Contract> abi --json`.
 
-Do not use `web/src/config.ts` or `web/src/abi/*.json`. Those belong to launch 1296 and its
-single-collateral `VerdictMarkets`, whose `createMarket`, `getMarket` and `MarketCreated` encode
-differently from this build.
+Do not use `web/src/config.ts` or `web/src/abi/*.json`. Those belong to Sepolia launch 1296 and
+its single-collateral `VerdictMarkets`, whose `createMarket`, `getMarket` and `MarketCreated`
+encode differently from this build. The Sepolia launch-1301 addresses are on chain 11155111 and
+use TestIMD; they are not this deployment either.
 
-Tokens are plain ERC-20s. There is no native ETH path: to bet in ETH, wrap it into Sepolia WETH
-(`deposit()` on `0xfff9976782d46cc05630d1f6ebab18b2324d6b14`) and approve `VerdictMarkets`.
-Test IMD (`0x44a1cd38474fb1748400e7deb5f8d786cce3f89a`) has an open `mint(address,uint256)`.
+Tokens are plain ERC-20s. There is no native ETH path: to bet in ETH, wrap it into WETH9
+(`deposit()` on `0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2`) and approve `VerdictMarkets`.
+IMD is `0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7`, the asset the IMD Intake sells in.
 
 ## Collateral slots
 
@@ -30,8 +32,8 @@ Every market bets in one of two collateral slots fixed at construction:
 
 | Slot | Token | Creator fee | Burn fee | Treasury fee | Pool cap per market |
 | --- | --- | --- | --- | --- | --- |
-| 0 | test IMD | 1.5% | 0.5% | 0.5% | 500 IMD |
-| 1 | Sepolia WETH | 1.5% | 0% | 1% | 1 WETH |
+| 0 | IMD | 1.5% | 0.5% | 0.5% | 500 IMD |
+| 1 | WETH9 | 1.5% | 0% | 1% | 1 WETH |
 
 Read a slot with `collateralConfig(uint8 slot)` which returns
 `(token, creatorFeeBps, burnFeeBps, treasuryFeeBps, maxPoolPerMarket)`. Any other slot reverts
@@ -164,11 +166,14 @@ still owed plus `bountyRemaining`; its WETH balance is the sum of WETH pools sti
 ## Trust notes for operators
 
 - The oracle owner (`0x397dacb1ee8e9a8ce5196988958f56bde0a0a312`) can change the Intake,
-  asset, signer and price with zero delay. Future asks trust the new values; paid requests keep
-  the old ones. If the oracle's asset is changed away from a market's bounty token, that market's
+  asset, signer and price after a 48-hour delay: `proposeConfig` emits `ConfigProposed` with the
+  earliest acceptance time, and `acceptConfig` applies it. Future asks trust the new values; paid
+  requests keep the old ones. A market whose ask is paid after a signer rotation accepts answers
+  from the new signer, so the 48 hours are the notice bettors get. If the oracle's asset is changed away from a market's bounty token, that market's
   asks revert `OracleAssetMismatch` until it is changed back, but refunds at `voidAfter` and
   claims still work.
 - The guardian (same address) controls only entry: pause, creator allowlist. It cannot touch
-  funds or outcomes. A fresh deployment accepts no markets until the guardian admits a creator or
+  funds or outcomes. The treasury (`0x2a85072b71908ca9255934250bfc6ceff82d0231`) is a separate
+  wallet that only receives the treasury fee share; it has no role. A fresh deployment accepts no markets until the guardian admits a creator or
   disables the allowlist.
 - A creator chooses the market's schedule. Nothing bounds `voidAfter`; inspect it before betting.

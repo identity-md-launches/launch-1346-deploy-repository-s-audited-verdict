@@ -104,9 +104,9 @@ contract VerdictOracleTest is TestBase {
     function test_wrongChainDomainStoresNothing() public {
         bytes32 id = oracle.request(body);
         OracleAttestation.Attestation memory a = simpleAnswer();
-        vm.chainId(1);
-        bytes memory sig = sign(a);
         vm.chainId(11155111);
+        bytes memory sig = sign(a);
+        vm.chainId(1);
         assertFalse(intake.callRaw(address(oracle), id, a, sig));
         assertEq(oracle.answerOf(a), bytes32(0));
     }
