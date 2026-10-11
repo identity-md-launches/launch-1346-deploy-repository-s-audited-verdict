@@ -161,4 +161,30 @@ WETH pools; the treasury, the burn vault and the owner hold exactly what the bri
 guardian, oracle owner, signer and allowlist stay as deployed. After every sequence all markets
 are settled and claimed and both balances must reach zero.
 
+### Revision after audit finding 73ad1052
+
+The reopened audit added two creation-time bounds to `VerdictMarkets._validateParams`: the ask
+window (`answerUntil - answerFrom`) is at least one hour and the timeout (`voidAfter`) is at most
+365 days after creation. The whole mainnet suite was re-run unchanged against the revised source
+and passed; its fixture schedules (a four-day window, a timeout one hour later) sit inside both
+bounds. `VerdictMarketTiming.t.sol` covers the bounds against the generic fixture; the mainnet
+suite now also pins them at the exact mainnet deployment: in both slots a window one second short,
+a timeout one second long, a distant close with a short window and two unordered schedules are
+refused with `InvalidParams` before any bounty moves and without a market id being consumed;
+exactly one hour and exactly 365 days are accepted, and a market at each cap with the 0.25 IMD
+reward ceiling then asks in the window's last second, is refused at `answerUntil`, voids at
+`voidAfter` with the keeper paid the ceiling once, the full stake refunded and nothing paid to the
+treasury, the vault or the owner. A 600-run fuzz over the close, answer start, window and lifetime
+checks that a schedule is accepted exactly when the window is at least one hour and the lifetime
+at most 365 days, and that an accepted one returns its untouched bounty in full at timeout. The
+invariant handler gained a `probeSchedule` action that, at any point of a sequence, offers an
+out-of-bounds schedule and asserts the refusal, the untouched custody and the unchanged market
+count (or `EntryPaused` first while entry is paused); the deterministic reachability test drives
+all three bounds and the paused case.
+
+The new tests read the clock through `vm.getBlockTimestamp()`: under via-IR a `block.timestamp`
+expression inside a loop with `vm.warp` is hoisted as loop-invariant, which made a first draft of
+the boundary test reuse the first slot's deadline for the second slot. That was a harness artifact,
+not a contract behaviour.
+
 No defect was found by these additions; `.imd-findings.json` was therefore not written.

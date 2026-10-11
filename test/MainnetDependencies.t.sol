@@ -695,6 +695,141 @@ contract MainnetDependenciesTest is MainnetFixture {
         assertEq(imd.balanceOf(creator) - creatorBefore, m.returnedBounty + 1 ether * 150 / 10_000);
     }
 
+    // ------------------------------------------------------------------ creation-time schedule bounds (73ad1052)
+
+    /// @dev The reopened audit added two bounds in `_validateParams`: the ask window is at least one hour and
+    /// the timeout is at most 365 days after creation. At the mainnet deployment each rejection happens before
+    /// any bounty is pulled, in both slots, and a distant close cannot bypass the lifetime bound.
+    function test_scheduleBoundsRejectBeforeCustodyInBothSlots() public {
+        // The clock is read through the cheatcode: under via-IR `block.timestamp` is treated as loop-invariant.
+        uint256 now_ = vm.getBlockTimestamp();
+        for (uint8 slot; slot < 2; slot++) {
+            VerdictMarkets.Params memory p = params(slot);
+            p.answerUntil = p.answerFrom + 1 hours - 1;
+            expectScheduleRejected(p);
+            p = params(slot);
+            p.voidAfter = uint64(now_ + 365 days + 1);
+            expectScheduleRejected(p);
+            p = params(slot);
+            p.closeAt = uint64(now_ + 365 days);
+            p.answerFrom = p.closeAt;
+            p.answerUntil = p.answerFrom + 1 hours;
+            p.voidAfter = p.answerUntil + 1;
+            expectScheduleRejected(p);
+            // The ordering checks run first, so an unordered schedule is InvalidParams and never a panic.
+            p = params(slot);
+            p.answerUntil = p.answerFrom - 1;
+            expectScheduleRejected(p);
+            p = params(slot);
+            p.voidAfter = p.answerUntil;
+            expectScheduleRejected(p);
+        }
+        assertEq(markets.marketCount(), 0, "no market was created");
+    }
+
+    function expectScheduleRejected(VerdictMarkets.Params memory p) internal {
+        uint256 creatorBefore = imd.balanceOf(creator);
+        uint256 heldBefore = imd.balanceOf(address(markets));
+        vm.prank(creator);
+        vm.expectRevert(VerdictMarkets.InvalidParams.selector);
+        markets.createMarket(p, body, escalationBody, "", 0);
+        assertEq(imd.balanceOf(creator), creatorBefore, "bounty pulled before validation");
+        assertEq(imd.balanceOf(address(markets)), heldBefore);
+    }
+
+    /// @dev Exactly one hour and exactly 365 days are accepted. A market at each cap with the 0.25 IMD reward
+    /// ceiling then times out: the ask is refused at `answerUntil`, the void waits for `voidAfter`, the keeper
+    /// gets the ceiling once, the creator gets the rest of the bounty, the bettor gets the full stake and the
+    /// treasury, the vault and the owner receive nothing.
+    function test_scheduleBoundariesAcceptedAndTimeOutAtTheCaps() public {
+        // The clock is read through the cheatcode after each warp: under via-IR a `block.timestamp` expression
+        // is hoisted out of the loop and the second slot would reuse the first slot's deadline.
+        uint256 created = vm.getBlockTimestamp();
+        for (uint8 slot; slot < 2; slot++) {
+            VerdictMarkets.Params memory p = params(slot);
+            p.answerUntil = p.answerFrom + 1 hours;
+            p.voidAfter = uint64(created + 365 days);
+            p.settlerReward = MAX_REWARD;
+            p.bounty = 2 * PRICE + 5 * MAX_REWARD;
+            uint256 id = createWith(p);
+            VerdictMarkets.Params memory stored = markets.getMarket(id).params;
+            assertEq(stored.answerUntil - stored.answerFrom, 1 hours);
+            assertEq(stored.voidAfter - created, 365 days);
+            uint256 stake = slot == 0 ? IMD_CAP : WETH_CAP;
+            uint256 bettorBefore = slot == 0 ? imd.balanceOf(alice) : weth.balanceOf(alice);
+            betAs(id, alice, 1, stake);
+            vm.warp(stored.answerUntil - 1);
+            assertTrue(markets.resolve(id, body) != bytes32(0), "the last second of the window still asks");
+            vm.warp(stored.answerUntil);
+            vm.expectRevert(VerdictMarkets.OutsideWindow.selector);
+            markets.resolve(id, body);
+            vm.warp(stored.voidAfter - 1);
+            vm.expectRevert(VerdictMarkets.OutsideWindow.selector);
+            markets.voidMarket(id);
+            vm.warp(stored.voidAfter);
+            address keeper = makeAddr(slot == 0 ? "imd keeper" : "weth keeper");
+            uint256 creatorBefore = imd.balanceOf(creator);
+            vm.prank(keeper);
+            markets.voidMarket(id);
+            // The resolve above was paid by this test contract; the void pays the keeper exactly the ceiling.
+            assertEq(imd.balanceOf(keeper), MAX_REWARD, "void pays the ceiling");
+            VerdictMarkets.Market memory m = markets.getMarket(id);
+            assertEq(m.oracleSpend, PRICE, "one ask was bought");
+            assertEq(m.rewardsPaid, 2 * MAX_REWARD, "resolve and void each paid a reward");
+            assertEq(imd.balanceOf(creator) - creatorBefore, m.returnedBounty);
+            assertEq(m.oracleSpend + m.rewardsPaid + m.returnedBounty, p.bounty, "bounty ledger closes");
+            vm.prank(alice);
+            assertEq(markets.claim(id), stake, "a void refunds the whole stake");
+            assertEq(slot == 0 ? imd.balanceOf(alice) : weth.balanceOf(alice), bettorBefore);
+            vm.warp(created);
+        }
+        assertEq(imd.balanceOf(TREASURY) + weth.balanceOf(TREASURY), 0, "a void pays the treasury nothing");
+        assertEq(imd.balanceOf(address(vault)) + weth.balanceOf(address(vault)), 0, "a void burns nothing");
+        assertEq(imd.balanceOf(OWNER) + weth.balanceOf(OWNER), 0, "the owner receives nothing");
+        assertEq(imd.balanceOf(address(markets)), 0);
+        assertEq(weth.balanceOf(address(markets)), 0);
+    }
+
+    /// @dev Around both bounds a schedule is accepted exactly when the window is at least one hour and the
+    /// timeout is at most 365 days from creation; the close and answer start may sit anywhere inside.
+    /// forge-config: default.fuzz.runs = 600
+    function testFuzz_scheduleAcceptedIffWithinBounds(
+        uint256 closeDelay,
+        uint256 answerDelay,
+        uint256 window,
+        uint256 lifetime,
+        bool useWeth
+    ) public {
+        window = bound(window, 1, 2 hours);
+        closeDelay = bound(closeDelay, 1, 365 days);
+        answerDelay = bound(answerDelay, 0, 3 days);
+        uint256 shortest = closeDelay + answerDelay + window + 1;
+        lifetime = bound(lifetime, shortest, shortest > 366 days ? shortest : 366 days);
+        uint256 now_ = vm.getBlockTimestamp();
+        VerdictMarkets.Params memory p = params(useWeth ? 1 : 0);
+        p.closeAt = uint64(now_ + closeDelay);
+        p.answerFrom = uint64(p.closeAt + answerDelay);
+        p.answerUntil = uint64(p.answerFrom + window);
+        p.voidAfter = uint64(now_ + lifetime);
+        bool valid = window >= 1 hours && lifetime <= 365 days;
+        uint256 creatorBefore = imd.balanceOf(creator);
+        if (!valid) {
+            expectScheduleRejected(p);
+            assertEq(markets.marketCount(), 0);
+            return;
+        }
+        uint256 id = createWith(p);
+        assertEq(creatorBefore - imd.balanceOf(creator), p.bounty, "the bounty is pulled once");
+        betAs(id, alice, 0, 1);
+        vm.warp(p.voidAfter);
+        markets.voidMarket(id);
+        vm.prank(alice);
+        assertEq(markets.claim(id), 1);
+        assertEq(imd.balanceOf(creator), creatorBefore, "the untouched bounty returns in full");
+        assertEq(imd.balanceOf(address(markets)), 0);
+        assertEq(weth.balanceOf(address(markets)), 0);
+    }
+
     // ------------------------------------------------------------------ voids
 
     function test_voidPaysNoFeesToAnyone() public {

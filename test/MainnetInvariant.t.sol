@@ -24,6 +24,7 @@ contract MainnetLifecycleHandler is MainnetFixture {
     mapping(uint256 => uint256) public actualRewards;
     uint256 public rotations;
     uint256 public refusedAdminCalls;
+    uint256 public refusedSchedules;
 
     constructor() {
         setUp();
@@ -245,6 +246,39 @@ contract MainnetLifecycleHandler is MainnetFixture {
         refusedAdminCalls++;
     }
 
+    /// @dev The reopened audit's creation-time bounds (73ad1052): at any point of a sequence, an allowlisted
+    /// creator offering an ask window under one hour, a timeout beyond 365 days or a distant close is refused
+    /// before any bounty moves, and the market count stays where it was. While entry is paused the pause
+    /// check comes first.
+    function probeSchedule(uint256 seed, uint256 windowSeed, uint256 lifeSeed) external {
+        VerdictMarkets.Params memory p = params(uint8(seed % 2));
+        uint256 which = seed % 3;
+        if (which == 0) {
+            p.answerUntil = p.answerFrom + uint64(bound(windowSeed, 1, 1 hours - 1));
+            p.voidAfter = p.answerUntil + 1;
+        } else if (which == 1) {
+            p.voidAfter = uint64(block.timestamp + bound(lifeSeed, 365 days + 1, 400 days));
+        } else {
+            p.closeAt = uint64(block.timestamp + bound(lifeSeed, 365 days, 400 days));
+            p.answerFrom = p.closeAt;
+            p.answerUntil = p.answerFrom + 1 hours;
+            p.voidAfter = p.answerUntil + 1;
+        }
+        uint256 count = markets.marketCount();
+        uint256 creatorBefore = imd.balanceOf(creator);
+        uint256 heldBefore = imd.balanceOf(address(markets));
+        bytes4 expected = markets.paused() ? VerdictMarkets.EntryPaused.selector : VerdictMarkets.InvalidParams.selector;
+        vm.prank(creator);
+        (bool ok, bytes memory data) =
+            address(markets).call(abi.encodeCall(markets.createMarket, (p, body, escalationBody, "", 0)));
+        assertFalse(ok, "an out-of-bounds schedule was accepted");
+        assertEq(bytes4(data), expected, "unexpected revert reason");
+        assertEq(markets.marketCount(), count, "market count moved");
+        assertEq(imd.balanceOf(creator), creatorBefore, "bounty pulled before validation");
+        assertEq(imd.balanceOf(address(markets)), heldBefore);
+        refusedSchedules++;
+    }
+
     function assertAccounting() external view {
         uint256 imdHeld;
         uint256 wethHeld;
@@ -335,7 +369,7 @@ contract MainnetInvariantTest is Test {
 
     function setUp() public {
         handler = new MainnetLifecycleHandler();
-        bytes4[] memory selectors = new bytes4[](13);
+        bytes4[] memory selectors = new bytes4[](14);
         selectors[0] = handler.enter.selector;
         selectors[1] = handler.advance.selector;
         selectors[2] = handler.togglePause.selector;
@@ -349,6 +383,7 @@ contract MainnetInvariantTest is Test {
         selectors[10] = handler.rotatePrice.selector;
         selectors[11] = handler.probeAdmin.selector;
         selectors[12] = handler.enter.selector;
+        selectors[13] = handler.probeSchedule.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
     }
@@ -369,6 +404,9 @@ contract MainnetInvariantTest is Test {
         }
         handler.probeAdmin(0, 1);
         handler.probeAdmin(6, 2);
+        handler.probeSchedule(0, 30 minutes, 0);
+        handler.probeSchedule(1, 0, 365 days + 1);
+        handler.probeSchedule(2, 0, 365 days);
         handler.advance(6 hours);
         for (uint256 i; i < 4; i++) {
             handler.ask(i);
@@ -379,10 +417,12 @@ contract MainnetInvariantTest is Test {
         handler.askEscalation(1);
         handler.replaceOutcome(1, false);
         handler.togglePause();
+        handler.probeSchedule(3, 1, 0);
         handler.assertAccounting();
         handler.drainAndAssert();
         assertEq(handler.rotations(), 1);
         assertEq(handler.refusedAdminCalls(), 2);
+        assertEq(handler.refusedSchedules(), 4, "three bounds plus one refusal while paused");
         for (uint256 i = 1; i <= 4; i++) {
             assertGt(handler.actualRewards(i), 0, "no reward paid in this slot");
         }
